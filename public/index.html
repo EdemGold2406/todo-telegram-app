@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VAPA Tasks</title>
+    <!-- Telegram Web App Script -->
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        body { font-family: sans-serif; padding: 20px; background-color: var(--tg-theme-bg-color, #fff); color: var(--tg-theme-text-color, #000); }
+        input, select, button { width: 100%; padding: 10px; margin-bottom: 10px; border-radius: 8px; border: 1px solid #ccc; box-sizing: border-box;}
+        button { background-color: var(--tg-theme-button-color, #3390ec); color: var(--tg-theme-button-text-color, #fff); border: none; font-weight: bold; cursor: pointer; }
+        .task-card { background: var(--tg-theme-secondary-bg-color, #f0f0f0); padding: 10px; border-radius: 8px; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; }
+        .delete-btn { background: #ff3b30; width: auto; padding: 5px 10px; margin: 0; }
+        .hidden { display: none; }
+        h2 { margin-top: 0; }
+    </style>
+</head>
+<body>
+
+    <h2>New Task</h2>
+    <input type="text" id="taskName" placeholder="Task Name (e.g. Pray)">
+    <div style="display: flex; gap: 5px;">
+        <input type="date" id="taskDate">
+        <input type="time" id="taskTime">
+    </div>
+
+    <select id="taskType" onchange="toggleDuration()">
+        <option value="single">One-time Task</option>
+        <option value="series">Series (Challenge)</option>
+    </select>
+
+    <input type="number" id="duration" placeholder="Duration (Days)" class="hidden">
+
+    <button onclick="saveTask()">Save Task</button>
+
+    <hr>
+    <h3>Pending Tasks</h3>
+    <div id="taskList">Loading...</div>
+
+    <script>
+        const tg = window.Telegram.WebApp;
+        tg.expand(); // Make app full screen
+
+        // Use the user's Chat ID from Telegram, or a default for testing
+        const chatId = tg.initDataUnsafe?.user?.id || '1845793703'; 
+
+        // 1. Toggle Duration Input
+        function toggleDuration() {
+            const type = document.getElementById('taskType').value;
+            const durInput = document.getElementById('duration');
+            if (type === 'series') durInput.classList.remove('hidden');
+            else durInput.classList.add('hidden');
+        }
+
+        // 2. Load Tasks
+        async function loadTasks() {
+            const list = document.getElementById('taskList');
+            list.innerHTML = 'Loading...';
+            try {
+                const res = await fetch(`/api/tasks/${chatId}`);
+                const tasks = await res.json();
+                
+                list.innerHTML = '';
+                tasks.forEach(task => {
+                    const div = document.createElement('div');
+                    div.className = 'task-card';
+                    div.innerHTML = `
+                        <div>
+                            <strong>${task.name}</strong><br>
+                            <small>${task.time} • ${task.date}</small>
+                        </div>
+                        <button class="delete-btn" onclick="deleteTask('${task.id}')">X</button>
+                    `;
+                    list.appendChild(div);
+                });
+            } catch (e) {
+                list.innerHTML = 'Error loading tasks.';
+            }
+        }
+
+        // 3. Save Task
+        async function saveTask() {
+            const taskName = document.getElementById('taskName').value;
+            const date = document.getElementById('taskDate').value;
+            const time = document.getElementById('taskTime').value;
+            const type = document.getElementById('taskType').value;
+            const duration = document.getElementById('duration').value;
+
+            if(!taskName || !time) return alert("Please fill details");
+
+            const data = { taskName, date, time, chatId, type, duration };
+
+            await fetch('/api/tasks', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(data)
+            });
+
+            alert('Saved!');
+            loadTasks(); // Refresh list
+            document.getElementById('taskName').value = '';
+        }
+
+        // 4. Delete Task
+        async function deleteTask(id) {
+            if(confirm('Delete this task?')) {
+                await fetch(`/api/tasks/${id}`, { method: 'DELETE' });
+                loadTasks();
+            }
+        }
+
+        // Initialize
+        // Set default date to today
+        document.getElementById('taskDate').valueAsDate = new Date();
+        loadTasks();
+
+    </script>
+</body>
+</html>
