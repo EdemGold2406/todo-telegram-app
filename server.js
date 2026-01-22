@@ -5,55 +5,86 @@ const TelegramBot = require('node-telegram-bot-api');
 const cron = require('node-cron');
 const cors = require('cors');
 const bodyParser = require('body-parser');
+const moment = require('moment-timezone'); // To handle WAT Time
 
 // --- CONFIGURATION ---
-// In production, put these in Render Environment Variables
-const SUPABASE_URL = process.env.SUPABASE_URL || 'https://kjeggesbrutxgxwdrguz.supabase.co';
-const SUPABASE_KEY = process.env.SUPABASE_KEY || 'sb_secret_4V2Cs3uMDJBdd_dMlCp7Sw_i5pJ3HRw';
-const TG_TOKEN = process.env.TG_TOKEN || '8259244248:AAETfA7KtG13m-K0bKEcSdFn2XTXCA-AyBc';
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_KEY = process.env.SUPABASE_KEY;
+const TG_TOKEN = process.env.TG_TOKEN;
+const TIMEZONE = 'Africa/Lagos'; // WAT
 
-// --- INITIALIZATION ---
-const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
-const bot = new TelegramBot(TG_TOKEN, { polling: false }); // Webhook not needed for push messages
+// --- INIT ---
+const supabase = createClient(https://kjeggesbrutxgxwdrguz.supabase.co , sb_secret_4V2Cs3uMDJBdd_dMlCp7Sw_i5pJ3HRw );
+const bot = new TelegramBot( 8259244248:AAETfA7KtG13m-K0bKEcSdFn2XTXCA-AyBc , { polling: false });
 const app = express();
 
 app.use(cors());
 app.use(bodyParser.json());
 app.use(express.static('public'));
 
-// --- API ENDPOINTS FOR WEB APP ---
+// --- API ENDPOINTS ---
 
-// 1. Get Tasks for User
+// 1. Get Tasks (Sorted by Date and Time)
 app.get('/api/tasks/:chatId', async (req, res) => {
+    // Get Today's date in WAT
+    const today = moment().tz(TIMEZONE).format('YYYY-MM-DD');
+    
+    // We fetch ALL pending tasks, or completed tasks ONLY from today
+    // This keeps the list clean but lets you see what you did today
     const { data, error } = await supabase
         .from('tasks')
         .select('*')
         .eq('chat_id', req.params.chatId)
+        .or(`status.eq.pending,and(status.eq.completed,due_date.eq.${today}),and(status.eq.missed,due_date.eq.${today})`)
+        .order('due_date', { ascending: true })
         .order('due_time', { ascending: true });
     
     if (error) return res.status(500).json(error);
     res.json(data);
 });
 
-// 2. Add New Task
+// 2. Add Task (Handles Series Logic)
 app.post('/api/tasks', async (req, res) => {
-    const { task_name, due_date, due_time, chat_id } = req.body;
-    const { data, error } = await supabase
-        .from('tasks')
-        .insert([{ task_name, due_date, due_time, chat_id, status: 'pending' }]);
+    const { task_name, start_date, due_time, chat_id, type, duration } = req.body;
+    
+    let tasksToInsert = [];
+
+    if (type === 'series') {
+        const days = parseInt(duration) || 1;
+        // Generate a task for each day
+        for (let i = 0; i < days; i++) {
+            const date = moment(start_date).add(i, 'days').format('YYYY-MM-DD');
+            tasksToInsert.push({
+                task_name: `${task_name} (Day ${i + 1}/${days})`,
+                due_date: date,
+                due_time: due_time,
+                chat_id: chat_id,
+                status: 'pending',
+                type: 'series'
+            });
+        }
+    } else {
+        // Single Task
+        tasksToInsert.push({
+            task_name,
+            due_date: start_date,
+            due_time,
+            chat_id,
+            status: 'pending',
+            type: 'single'
+        });
+    }
+
+    const { error } = await supabase.from('tasks').insert(tasksToInsert);
     
     if (error) return res.status(500).json(error);
-    res.json({ success: true });
+    res.json({ success: true, count: tasksToInsert.length });
 });
 
-// 3. Update Task Status (Green/Red Tick)
+// 3. Update Status
 app.put('/api/tasks/:id', async (req, res) => {
     const { status } = req.body;
-    const { error } = await supabase
-        .from('tasks')
-        .update({ status })
-        .eq('id', req.params.id);
-    
+    const { error } = await supabase.from('tasks').update({ status }).eq('id', req.params.id);
     if (error) return res.status(500).json(error);
     res.json({ success: true });
 });
@@ -65,89 +96,83 @@ app.delete('/api/tasks/:id', async (req, res) => {
     res.json({ success: true });
 });
 
+// --- AUTOMATION (CRON JOBS) ---
 
-// --- CRON JOBS (THE AUTOMATION) ---
-
-// JOB 1: Reminders (Runs every minute)
+// JOB 1: Reminders (Every Minute)
 cron.schedule('* * * * *', async () => {
-    const now = new Date();
-    // Format current time to HH:MM:00 for comparison
-    const timeString = now.toTimeString().split(' ')[0].substring(0, 5); // "14:30"
-    const dateString = now.toISOString().split('T')[0]; // "2026-01-22"
+    // Get Current Time in WAT
+    const now = moment().tz(TIMEZONE);
+    const currentDate = now.format('YYYY-MM-DD');
+    const currentTime = now.format('HH:mm');
 
-    // Find pending tasks due right now
     const { data: tasks } = await supabase
         .from('tasks')
         .select('*')
-        .eq('due_date', dateString)
-        .eq('due_time', timeString)
+        .eq('due_date', currentDate)
+        .eq('due_time', currentTime)
         .eq('status', 'pending');
 
     if (tasks && tasks.length > 0) {
         tasks.forEach(task => {
-            bot.sendMessage(task.chat_id, `⏰ <b>It's time!</b>\n\nTask: <b>${task.task_name}</b>\n\nOpen the app to mark it done.`, { parse_mode: 'HTML' });
+            bot.sendMessage(task.chat_id, `🔔 <b>Reminder!</b>\n\nTask: ${task.task_name}\nTime: ${task.due_time}\n\nTap "My Tasks" to mark it done!`, { parse_mode: 'HTML' });
         });
     }
 });
 
-// JOB 2: Good Morning (Runs at 7:00 AM)
-cron.schedule('0 7 * * *', async () => {
-    // Get unique users with tasks today
-    const dateString = new Date().toISOString().split('T')[0];
-    const { data: tasks } = await supabase
-        .from('tasks')
-        .select('chat_id, task_name')
-        .eq('due_date', dateString);
-
-    // Group tasks by user
-    const userTasks = {};
-    tasks.forEach(t => {
-        if (!userTasks[t.chat_id]) userTasks[t.chat_id] = [];
-        userTasks[t.chat_id].push(t.task_name);
-    });
-
-    // Send messages
-    for (const [chatId, taskList] of Object.entries(userTasks)) {
-        bot.sendMessage(chatId, `☀️ <b>Good Morning!</b>\n\nYou have ${taskList.length} tasks scheduled for today.\nLet's get them done! 💪`, { parse_mode: 'HTML' });
-    }
-});
-
-// JOB 3: 1 AM Review & Rollover (Runs at 01:00 AM)
+// JOB 2: End of Day Review (1 AM WAT)
 cron.schedule('0 1 * * *', async () => {
-    const yesterday = new Date();
-    yesterday.setDate(yesterday.getDate() - 1);
-    const yesterdayStr = yesterday.toISOString().split('T')[0];
-    const todayStr = new Date().toISOString().split('T')[0];
+    // Check "Yesterday" in WAT
+    const yesterday = moment().tz(TIMEZONE).subtract(1, 'days').format('YYYY-MM-DD');
+    const today = moment().tz(TIMEZONE).format('YYYY-MM-DD');
 
-    // Find tasks from "Yesterday" that are NOT completed
+    // Find pending tasks from yesterday
     const { data: missedTasks } = await supabase
         .from('tasks')
         .select('*')
-        .eq('due_date', yesterdayStr)
-        .neq('status', 'completed');
+        .eq('due_date', yesterday)
+        .eq('status', 'pending');
 
     if (missedTasks && missedTasks.length > 0) {
-        // Group by user
-        const userMissed = {};
+        const userGroups = {};
         missedTasks.forEach(t => {
-            if (!userMissed[t.chat_id]) userMissed[t.chat_id] = [];
-            userMissed[t.chat_id].push(t);
+            if (!userGroups[t.chat_id]) userGroups[t.chat_id] = [];
+            userGroups[t.chat_id].push(t);
         });
 
-        for (const [chatId, tasks] of Object.entries(userMissed)) {
-            // 1. Move dates to Today
+        for (const [chatId, tasks] of Object.entries(userGroups)) {
+            // Move to Today
             const ids = tasks.map(t => t.id);
-            await supabase
-                .from('tasks')
-                .update({ due_date: todayStr, status: 'pending' })
-                .in('id', ids);
+            await supabase.from('tasks').update({ due_date: today }).in('id', ids);
 
-            // 2. Send Report
-            const taskNames = tasks.map(t => `- ${t.task_name}`).join('\n');
-            bot.sendMessage(chatId, `🌙 <b>End of Day Review</b>\n\nI noticed you didn't mark these as done:\n${taskNames}\n\nI've moved them to today for you. Try to clear them!`, { parse_mode: 'HTML' });
+            // Notify
+            const names = tasks.map(t => `- ${t.task_name}`).join('\n');
+            bot.sendMessage(chatId, `🌙 <b>Review: Missed Tasks</b>\n\nYou didn't finish these yesterday:\n${names}\n\nI have moved them to today. Do not give up! 💪`, { parse_mode: 'HTML' });
         }
     }
+}, {
+    timezone: "Africa/Lagos"
+});
+
+// JOB 3: Good Morning (7 AM WAT)
+cron.schedule('0 7 * * *', async () => {
+    const today = moment().tz(TIMEZONE).format('YYYY-MM-DD');
+    
+    const { data: tasks } = await supabase
+        .from('tasks')
+        .select('chat_id')
+        .eq('due_date', today)
+        .eq('status', 'pending');
+
+    if(tasks && tasks.length > 0) {
+        // Unique users
+        const users = [...new Set(tasks.map(t => t.chat_id))];
+        users.forEach(chatId => {
+            bot.sendMessage(chatId, "☀️ <b>Good Morning!</b>\nCheck your app to see your tasks for the day.", { parse_mode: 'HTML' });
+        });
+    }
+}, {
+    timezone: "Africa/Lagos"
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`To-Do Bot Server running on port ${PORT}`));
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
