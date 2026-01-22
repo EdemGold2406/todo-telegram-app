@@ -8,7 +8,6 @@ const bodyParser = require('body-parser');
 const moment = require('moment-timezone'); 
 
 // --- INTEGATED CREDENTIALS ---
-// We have added quotes '' around them to fix the syntax error
 const SUPABASE_URL = 'https://kjeggesbrutxgxwdrguz.supabase.co';
 const SUPABASE_KEY = 'sb_secret_4V2Cs3uMDJBdd_dMlCp7Sw_i5pJ3HRw';
 const TG_TOKEN = '8259244248:AAETfA7KtG13m-K0bKEcSdFn2XTXCA-AyBc';
@@ -27,17 +26,15 @@ app.use(express.static('public'));
 
 // 1. Get Tasks (Sorted by Date and Time)
 app.get('/api/tasks/:chatId', async (req, res) => {
-    // Get Today's date in WAT
-    const today = moment().tz(TIMEZONE).format('YYYY-MM-DD');
-    
-    // We fetch ALL pending tasks, or completed/missed tasks from TODAY only
+    // This fetches all pending tasks, regardless of date, keeping the list complete.
+    // The sorting ensures today's tasks are always first.
     const { data, error } = await supabase
         .from('tasks')
         .select('*')
         .eq('chat_id', req.params.chatId)
-        .or(`status.eq.pending,and(status.eq.completed,due_date.eq.${today}),and(status.eq.missed,due_date.eq.${today})`)
-        .order('due_date', { ascending: true })
-        .order('due_time', { ascending: true });
+        .neq('status', 'completed') // We only show pending or missed tasks
+        .order('due_date', { ascending: true }) // Sort by date first (most important)
+        .order('due_time', { ascending: true }); // Then sort by time
     
     if (error) return res.status(500).json(error);
     res.json(data);
@@ -51,7 +48,6 @@ app.post('/api/tasks', async (req, res) => {
 
     if (type === 'series') {
         const days = parseInt(duration) || 1;
-        // Generate a task for each day
         for (let i = 0; i < days; i++) {
             const date = moment(start_date).add(i, 'days').format('YYYY-MM-DD');
             tasksToInsert.push({
@@ -64,7 +60,6 @@ app.post('/api/tasks', async (req, res) => {
             });
         }
     } else {
-        // Single Task
         tasksToInsert.push({
             task_name,
             due_date: start_date,
@@ -100,7 +95,6 @@ app.delete('/api/tasks/:id', async (req, res) => {
 
 // JOB 1: Reminders (Every Minute)
 cron.schedule('* * * * *', async () => {
-    // Get Current Time in WAT
     const now = moment().tz(TIMEZONE);
     const currentDate = now.format('YYYY-MM-DD');
     const currentTime = now.format('HH:mm');
@@ -119,18 +113,16 @@ cron.schedule('* * * * *', async () => {
     }
 });
 
-// JOB 2: End of Day Review (1 AM WAT)
+// JOB 2: End of Day Review & Rollover (1 AM WAT)
 cron.schedule('0 1 * * *', async () => {
-    // Check "Yesterday" in WAT
     const yesterday = moment().tz(TIMEZONE).subtract(1, 'days').format('YYYY-MM-DD');
     const today = moment().tz(TIMEZONE).format('YYYY-MM-DD');
 
-    // Find pending tasks from yesterday
     const { data: missedTasks } = await supabase
         .from('tasks')
         .select('*')
         .eq('due_date', yesterday)
-        .eq('status', 'pending');
+        .in('status', ['pending', 'missed']); // Catches both types
 
     if (missedTasks && missedTasks.length > 0) {
         const userGroups = {};
@@ -140,23 +132,37 @@ cron.schedule('0 1 * * *', async () => {
         });
 
         for (const [chatId, tasks] of Object.entries(userGroups)) {
-            // Move to Today
             const ids = tasks.map(t => t.id);
-            await supabase.from('tasks').update({ due_date: today }).in('id', ids);
-
-            // Notify
+            await supabase.from('tasks').update({ due_date: today, status: 'pending' }).in('id', ids);
             const names = tasks.map(t => `- ${t.task_name}`).join('\n');
-            bot.sendMessage(chatId, `🌙 <b>Review: Missed Tasks</b>\n\nYou didn't finish these yesterday:\n${names}\n\nI have moved them to today. Do not give up! 💪`, { parse_mode: 'HTML' });
+            bot.sendMessage(chatId, `🌙 <b>Review: Missed Tasks</b>\n\nYou didn't finish these yesterday:\n${names}\n\nI have moved them to today. Keep going! 💪`, { parse_mode: 'HTML' });
         }
     }
-}, {
-    timezone: "Africa/Lagos"
-});
+}, { timezone: "Africa/Lagos" });
 
-// JOB 3: Good Morning (7 AM WAT)
+
+// ⭐ NEW ⭐ JOB 3: Daily Cleanup (2 AM WAT)
+cron.schedule('0 2 * * *', async () => {
+    const yesterday = moment().tz(TIMEZONE).subtract(1, 'days').format('YYYY-MM-DD');
+    
+    // Find all COMPLETED tasks from yesterday
+    const { error } = await supabase
+        .from('tasks')
+        .delete()
+        .eq('due_date', yesterday)
+        .eq('status', 'completed');
+
+    if (error) {
+        console.error('Cleanup Error:', error);
+    } else {
+        console.log(`🧹 Cleaned up completed tasks from ${yesterday}.`);
+    }
+}, { timezone: "Africa/Lagos" });
+
+
+// JOB 4: Good Morning (7 AM WAT)
 cron.schedule('0 7 * * *', async () => {
     const today = moment().tz(TIMEZONE).format('YYYY-MM-DD');
-    
     const { data: tasks } = await supabase
         .from('tasks')
         .select('chat_id')
@@ -164,15 +170,13 @@ cron.schedule('0 7 * * *', async () => {
         .eq('status', 'pending');
 
     if(tasks && tasks.length > 0) {
-        // Unique users
         const users = [...new Set(tasks.map(t => t.chat_id))];
         users.forEach(chatId => {
             bot.sendMessage(chatId, "☀️ <b>Good Morning!</b>\nCheck your app to see your tasks for the day.", { parse_mode: 'HTML' });
         });
     }
-}, {
-    timezone: "Africa/Lagos"
-});
+}, { timezone: "Africa/Lagos" });
+
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
