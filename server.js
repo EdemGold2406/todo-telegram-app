@@ -5,17 +5,18 @@ const TelegramBot = require('node-telegram-bot-api');
 const cron = require('node-cron');
 const cors = require('cors');
 const bodyParser = require('body-parser');
-const moment = require('moment-timezone'); // To handle WAT Time
+const moment = require('moment-timezone'); 
 
-// --- CONFIGURATION ---
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_KEY = process.env.SUPABASE_KEY;
-const TG_TOKEN = process.env.TG_TOKEN;
+// --- INTEGATED CREDENTIALS ---
+// We have added quotes '' around them to fix the syntax error
+const SUPABASE_URL = 'https://kjeggesbrutxgxwdrguz.supabase.co';
+const SUPABASE_KEY = 'sb_secret_4V2Cs3uMDJBdd_dMlCp7Sw_i5pJ3HRw';
+const TG_TOKEN = '8259244248:AAETfA7KtG13m-K0bKEcSdFn2XTXCA-AyBc';
 const TIMEZONE = 'Africa/Lagos'; // WAT
 
 // --- INIT ---
-const supabase = createClient(https://kjeggesbrutxgxwdrguz.supabase.co , sb_secret_4V2Cs3uMDJBdd_dMlCp7Sw_i5pJ3HRw );
-const bot = new TelegramBot( 8259244248:AAETfA7KtG13m-K0bKEcSdFn2XTXCA-AyBc , { polling: false });
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+const bot = new TelegramBot(TG_TOKEN, { polling: false });
 const app = express();
 
 app.use(cors());
@@ -29,8 +30,7 @@ app.get('/api/tasks/:chatId', async (req, res) => {
     // Get Today's date in WAT
     const today = moment().tz(TIMEZONE).format('YYYY-MM-DD');
     
-    // We fetch ALL pending tasks, or completed tasks ONLY from today
-    // This keeps the list clean but lets you see what you did today
+    // We fetch ALL pending tasks, or completed/missed tasks from TODAY only
     const { data, error } = await supabase
         .from('tasks')
         .select('*')
