@@ -1,81 +1,153 @@
+require('dotenv').config();
 const express = require('express');
-const Airtable = require('airtable');
-const bodyParser = require('body-parser');
+const { createClient } = require('@supabase/supabase-js');
+const TelegramBot = require('node-telegram-bot-api');
+const cron = require('node-cron');
 const cors = require('cors');
-const path = require('path');
+const bodyParser = require('body-parser');
 
+// --- CONFIGURATION ---
+// In production, put these in Render Environment Variables
+const SUPABASE_URL = process.env.SUPABASE_URL || 'https://kjeggesbrutxgxwdrguz.supabase.co';
+const SUPABASE_KEY = process.env.SUPABASE_KEY || 'sb_secret_4V2Cs3uMDJBdd_dMlCp7Sw_i5pJ3HRw';
+const TG_TOKEN = process.env.TG_TOKEN || '8259244248:AAETfA7KtG13m-K0bKEcSdFn2XTXCA-AyBc';
+
+// --- INITIALIZATION ---
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+const bot = new TelegramBot(TG_TOKEN, { polling: false }); // Webhook not needed for push messages
 const app = express();
-app.use(bodyParser.json());
+
 app.use(cors());
-app.use(express.static('public')); // Serves the HTML file
+app.use(bodyParser.json());
+app.use(express.static('public'));
 
-// CONFIGURE AIRTABLE HERE
-// (In production, use Environment Variables, but for now paste here)
-const base = new Airtable({apiKey: 'patD2Ikeh73fCcDn3.3fd3f3cbfa2b5c912f59b988612e814931125012452f908e6fec03e8ddb7eea0'}).base('appsx3vKrvNFXmLoq');
+// --- API ENDPOINTS FOR WEB APP ---
 
-// API: Get Tasks for a User
-app.get('/api/tasks/:chatId', (req, res) => {
-    const chatId = req.params.chatId;
-    // Look for tasks where Chat ID matches and Status is Pending
-    base('Daily_Tasks').select({
-        filterByFormula: `AND({chat_ID} = '${chatId}', {Status} = 'Pending')`
-    }).firstPage((err, records) => {
-        if (err) { console.error(err); return res.status(500).send(err); }
-        
-        const tasks = records.map(record => ({
-            id: record.id,
-            name: record.get('Task Name'),
-            time: record.get('Due Time'),
-            date: record.get('Due Date')
-        }));
-        res.json(tasks);
-    });
+// 1. Get Tasks for User
+app.get('/api/tasks/:chatId', async (req, res) => {
+    const { data, error } = await supabase
+        .from('tasks')
+        .select('*')
+        .eq('chat_id', req.params.chatId)
+        .order('due_time', { ascending: true });
+    
+    if (error) return res.status(500).json(error);
+    res.json(data);
 });
 
-// API: Add Task
-app.post('/api/tasks', (req, res) => {
-    const { taskName, date, time, chatId, type, duration } = req.body;
+// 2. Add New Task
+app.post('/api/tasks', async (req, res) => {
+    const { task_name, due_date, due_time, chat_id } = req.body;
+    const { data, error } = await supabase
+        .from('tasks')
+        .insert([{ task_name, due_date, due_time, chat_id, status: 'pending' }]);
+    
+    if (error) return res.status(500).json(error);
+    res.json({ success: true });
+});
 
-    if (type === 'series') {
-        // Add to Series Table
-        base('Series_Rules').create([{
-            "fields": {
-                "Series Name": taskName,
-                "Start Date": date,
-                "Duration": parseInt(duration),
-                "Daily Time": time,
-                "Status": "Active",
-                "chat_ID": chatId
-            }
-        }], (err) => {
-            if (err) return res.status(500).send(err);
-            res.json({ success: true, message: "Series Started" });
-        });
-    } else {
-        // Add to Daily Tasks
-        base('Daily_Tasks').create([{
-            "fields": {
-                "Task Name": taskName,
-                "Due Date": date,
-                "Due Time": time,
-                "Status": "Pending",
-                "Source": "Manual",
-                "chat_ID": chatId
-            }
-        }], (err) => {
-            if (err) return res.status(500).send(err);
-            res.json({ success: true, message: "Task Added" });
+// 3. Update Task Status (Green/Red Tick)
+app.put('/api/tasks/:id', async (req, res) => {
+    const { status } = req.body;
+    const { error } = await supabase
+        .from('tasks')
+        .update({ status })
+        .eq('id', req.params.id);
+    
+    if (error) return res.status(500).json(error);
+    res.json({ success: true });
+});
+
+// 4. Delete Task
+app.delete('/api/tasks/:id', async (req, res) => {
+    const { error } = await supabase.from('tasks').delete().eq('id', req.params.id);
+    if (error) return res.status(500).json(error);
+    res.json({ success: true });
+});
+
+
+// --- CRON JOBS (THE AUTOMATION) ---
+
+// JOB 1: Reminders (Runs every minute)
+cron.schedule('* * * * *', async () => {
+    const now = new Date();
+    // Format current time to HH:MM:00 for comparison
+    const timeString = now.toTimeString().split(' ')[0].substring(0, 5); // "14:30"
+    const dateString = now.toISOString().split('T')[0]; // "2026-01-22"
+
+    // Find pending tasks due right now
+    const { data: tasks } = await supabase
+        .from('tasks')
+        .select('*')
+        .eq('due_date', dateString)
+        .eq('due_time', timeString)
+        .eq('status', 'pending');
+
+    if (tasks && tasks.length > 0) {
+        tasks.forEach(task => {
+            bot.sendMessage(task.chat_id, `⏰ <b>It's time!</b>\n\nTask: <b>${task.task_name}</b>\n\nOpen the app to mark it done.`, { parse_mode: 'HTML' });
         });
     }
 });
 
-// API: Delete Task
-app.delete('/api/tasks/:id', (req, res) => {
-    base('Daily_Tasks').destroy([req.params.id], (err) => {
-        if (err) return res.status(500).send(err);
-        res.json({ success: true });
+// JOB 2: Good Morning (Runs at 7:00 AM)
+cron.schedule('0 7 * * *', async () => {
+    // Get unique users with tasks today
+    const dateString = new Date().toISOString().split('T')[0];
+    const { data: tasks } = await supabase
+        .from('tasks')
+        .select('chat_id, task_name')
+        .eq('due_date', dateString);
+
+    // Group tasks by user
+    const userTasks = {};
+    tasks.forEach(t => {
+        if (!userTasks[t.chat_id]) userTasks[t.chat_id] = [];
+        userTasks[t.chat_id].push(t.task_name);
     });
+
+    // Send messages
+    for (const [chatId, taskList] of Object.entries(userTasks)) {
+        bot.sendMessage(chatId, `☀️ <b>Good Morning!</b>\n\nYou have ${taskList.length} tasks scheduled for today.\nLet's get them done! 💪`, { parse_mode: 'HTML' });
+    }
+});
+
+// JOB 3: 1 AM Review & Rollover (Runs at 01:00 AM)
+cron.schedule('0 1 * * *', async () => {
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    const yesterdayStr = yesterday.toISOString().split('T')[0];
+    const todayStr = new Date().toISOString().split('T')[0];
+
+    // Find tasks from "Yesterday" that are NOT completed
+    const { data: missedTasks } = await supabase
+        .from('tasks')
+        .select('*')
+        .eq('due_date', yesterdayStr)
+        .neq('status', 'completed');
+
+    if (missedTasks && missedTasks.length > 0) {
+        // Group by user
+        const userMissed = {};
+        missedTasks.forEach(t => {
+            if (!userMissed[t.chat_id]) userMissed[t.chat_id] = [];
+            userMissed[t.chat_id].push(t);
+        });
+
+        for (const [chatId, tasks] of Object.entries(userMissed)) {
+            // 1. Move dates to Today
+            const ids = tasks.map(t => t.id);
+            await supabase
+                .from('tasks')
+                .update({ due_date: todayStr, status: 'pending' })
+                .in('id', ids);
+
+            // 2. Send Report
+            const taskNames = tasks.map(t => `- ${t.task_name}`).join('\n');
+            bot.sendMessage(chatId, `🌙 <b>End of Day Review</b>\n\nI noticed you didn't mark these as done:\n${taskNames}\n\nI've moved them to today for you. Try to clear them!`, { parse_mode: 'HTML' });
+        }
+    }
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => console.log(`To-Do Bot Server running on port ${PORT}`));
