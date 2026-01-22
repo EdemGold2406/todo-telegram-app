@@ -3,29 +3,47 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>To Do</title>
+    <title>VAPA To-Do</title>
     <link rel="stylesheet" href="style.css">
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
 </head>
 <body>
-
-    <h2 id="dateHeader">Today's Tasks</h2>
-    
-    <div id="taskList">
-        <!-- Tasks will generate here -->
+    <div class="header">
+        <h2>My Tasks</h2>
+        <span id="currentDate">Loading...</span>
     </div>
 
-    <button class="fab" onclick="openModal()">+ Add New Task</button>
+    <div id="taskList">
+        <!-- Tasks inject here -->
+    </div>
 
-    <!-- Add Task Modal -->
+    <!-- Floating Action Button -->
+    <button class="fab" onclick="openModal()">+ New Task</button>
+
+    <!-- Modal -->
     <div id="modal" class="modal">
         <div class="modal-content">
-            <h3>New Task</h3>
-            <input type="text" id="taskName" placeholder="What needs to be done?">
-            <input type="time" id="taskTime">
+            <h3>Add Task</h3>
+            <input type="text" id="taskName" placeholder="Task Name">
+            
+            <div class="row">
+                <input type="date" id="startDate">
+                <input type="time" id="taskTime">
+            </div>
+
+            <label class="toggle-container">
+                <input type="checkbox" id="isSeries" onchange="toggleSeries()">
+                <span class="toggle-label">Enable Series (Recurring)</span>
+            </label>
+
+            <div id="seriesInput" class="hidden">
+                <input type="number" id="duration" placeholder="Duration (Days)" value="21">
+                <small>This will create tasks for X days.</small>
+            </div>
+
             <div class="modal-btns">
-                <button class="btn-secondary" onclick="closeModal()">Cancel</button>
-                <button class="btn-primary" onclick="saveTask()">Save</button>
+                <button class="btn-cancel" onclick="closeModal()">Cancel</button>
+                <button class="btn-save" onclick="saveTask()">Save</button>
             </div>
         </div>
     </div>
