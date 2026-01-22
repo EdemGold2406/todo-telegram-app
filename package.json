@@ -1,5 +1,5 @@
 {
-  "name": "todo-bot",
+  "name": "vapa-bot",
   "version": "3.0.0",
   "main": "server.js",
   "scripts": {
@@ -16,4 +16,5 @@
     "moment-timezone": "^0.5.43"
   }
 }
+
 
