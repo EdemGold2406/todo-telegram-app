@@ -14,7 +14,7 @@ const TG_TOKEN = '8259244248:AAETfA7KtG13m-K0bKEcSdFn2XTXCA-AyBc';
 const TIMEZONE = 'Africa/Lagos';
 
 // ⚠️ IMPORTANT: Replace this with your actual Web App URL (e.g., Vercel/Netlify link)
-const WEB_APP_URL = 'https://YOUR-WEB-APP-URL.com'; 
+const WEB_APP_URL = 'https://todo-telegram-app.onrender.com'; 
 
 // --- INIT ---
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
@@ -213,3 +213,4 @@ cron.schedule('0 7 * * *', async () => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}...`));
+
